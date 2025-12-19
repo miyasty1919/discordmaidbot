@@ -7,12 +7,30 @@ import config
 import random
 from datetime import datetime
 
-# 設定読み込み
+# --- 追加: ヘルスチェック用サーバーのためのインポート ---
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# --- 追加: ヘルスチェック用サーバーの設定 ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Koyebからの生存確認(GETリクエスト)に応答するクラス"""
+    def do_GET(self):
+        self.send_response(200) # 正常を意味する 200 を返す
+        self.end_headers()
+        self.wfile.write(b"Miyamoto-chan is online!")
+
+def run_health_server():
+    """別スレッドで実行するためのサーバー起動関数"""
+    # ポート番号は Dockerfile の EXPOSE で指定した 8000 に合わせます
+    server = HTTPServer(('0.0.0.0', 8000), HealthCheckHandler)
+    print("[System] Health check server started on port 8000")
+    server.serve_forever()
+
+# --- 既存の設定読み込み ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# commands.Bot を使用
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 EXTENSIONS = [
@@ -26,43 +44,32 @@ EXTENSIONS = [
 
 @bot.event
 async def on_ready():
-    # 1. コンソールログ
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     
-    # 2. 不要なコマンドの同期解除
     bot.remove_command("say")
     bot.tree.remove_command("say")
     bot.tree.remove_command("bm")
     
-    # 3. スラッシュコマンドを同期
     try:
         synced = await bot.tree.sync()
         print(f"🔄 Successfully synced {len(synced)} slash commands.")
     except Exception as e:
         print(f"⚠️ Failed to sync commands: {e}")
 
-    # 4. 起動完了メッセージ（埋め込み型）の送信
     channel = bot.get_channel(config.STARTUP_CHANNEL_ID)
     if channel:
-        # config.py からランダムな挨拶を選択
         greet_text = random.choice(config.STARTUP_MESSAGES)
-        
         embed = discord.Embed(
             title="System Online",
             description=f"{greet_text}\n\n{config.UPDATE_NOTE}",
-            color=0xffc0cb, # 宮本ちゃんカラー（ピンク系）
+            color=0xffc0cb,
             timestamp=datetime.now()
         )
-        
-        # 左上にBotのアイコンを表示
         embed.set_author(
             name=f"{bot.user.name} v{config.BOT_VERSION}", 
             icon_url=bot.user.display_avatar.url
         )
-        
-        # フッターの設定
         embed.set_footer(text="宮本ちゃんメイドシステム 稼働中")
-        
         await channel.send(embed=embed)
     
     print("------")
@@ -79,18 +86,17 @@ async def load_extensions():
             print(f"❌ Failed to load {ext}: {e}")
 
 async def main():
+    # ★ 追加: Bot起動前にヘルスチェックサーバーを別スレッドで開始
+    # これにより、Botが接続中であってもKoyebへの応答が可能になります
+    threading.Thread(target=run_health_server, daemon=True).start()
+
     async with bot:
-        # 先に拡張機能を読み込む
-        # ここで各Cogの setup() が呼ばれ、bot.add_view が実行されます
         await load_extensions()
         
-        # 匿名機能の永続ビューをここで再登録（setupでやっていない場合の保険）
-        # 各Cog側のsetup内で適切に add_view されている場合はこれらは不要です
         try:
             from cogs.database import RegistrationView
             from cogs.anonymous import PostView, Anonymous
             bot.add_view(RegistrationView(bot))
-            # 匿名投稿用の全パターン登録
             anon_cog = bot.get_cog("Anonymous")
             if anon_cog:
                 bot.add_view(PostView(anon_cog, is_anon=True, is_image=False))
