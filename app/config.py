@@ -1,8 +1,12 @@
 # config.py
+import os  # 環境変数を読み込むために追加
 
 # Bot設定
 BOT_VERSION = "2.1.0 (Modular)"
-TOKEN = "MTQ0NzgzODY3MTAwNzkwNzg2MQ.GI4rnD.S1u0BtUQ-SE_w-Sj8L3hLdltq1_BSa-4fGj6KU"
+
+# ★重要：トークンを直接書かず、Koyebの環境変数から取得します
+# Koyeb側で "DISCORD_TOKEN" という名前で設定してください
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 # チャンネルID
 STARTUP_CHANNEL_ID = 1447846598574084218    # 起動ログ
