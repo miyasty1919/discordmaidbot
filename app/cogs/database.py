@@ -57,13 +57,16 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         if not check_cooldown(interaction.user.id):
             return await interaction.response.send_message("⚠️ 短時間に投稿しすぎです。", ephemeral=True)
 
-        # 【仕様変更】表示フォーマット：【ジャンル】タイトル (ID削除、階層削除)
-        # 末尾に改行を2つ入れて、次の作品との間隔を空ける
+        # 【仕様変更】1行フォーマットに変更
+        # 例: 【ジャンル】タイトル 作者: 作者名 / 満足度: ⭐⭐
         entry_text = (
-            f"【{self.genre}】**{self.title_input.value}**\n"
-            f"└ 作者: {self.author_input.value or '未入力'} / 満足度: {self.rating}\n\n"
+            f"【{self.genre}】**{self.title_input.value}** "
+            f"作者: {self.author_input.value or '未入力'} / 満足度: {self.rating}"
         )
         
+        # 種別見出し
+        header_text = f"**【{self.sub_type}】**"
+
         last_msg = None
         # 最新のメッセージ履歴を確認
         async for msg in self.target_channel.history(limit=10):
@@ -71,34 +74,47 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
                 embed = msg.embeds[0]
                 desc = embed.description or ""
 
-                # 【重要】旧仕様のメッセージ（IDが含まれている、または形式が古い）は無視して、新規投稿させる
-                if "||" in desc: 
+                # 旧仕様(ID入り)や満員(10件以上)のメッセージはスキップ
+                # "満足度:" の数で件数をカウントします
+                if "||" in desc or desc.count("満足度:") >= 10:
                     continue
                 
-                # 現在のメッセージ内の作品数をカウント（「└ 作者:」の数で判定）
-                entry_count = desc.count("\n└ 作者:")
-                
-                # 10件未満ならこのメッセージに追記する
-                if entry_count < 10:
-                    last_msg = msg
-                    break
-                # 10件以上なら、このメッセージは満員なのでスルー（結果的に新規作成になる）
+                # ここまで来たら書き込み可能なメッセージ
+                last_msg = msg
+                break
 
         if last_msg:
-            # 既存メッセージに追記
+            # 既存メッセージへの追記処理（種別ごとに整理）
             embed = last_msg.embeds[0]
-            embed.description += entry_text
+            desc = embed.description
+
+            if header_text in desc:
+                # すでにその種別の見出しが存在する場合、そのブロックの末尾に追加する
+                # 正規表現: 見出し〜次の見出し(または文末)の間を探す
+                pattern = re.escape(header_text) + r"(.*?)(\n\n\*\*【|$)"
+                
+                # マッチした箇所（同じ種別のリスト）の最後に新しい行を追加
+                def replacer(match):
+                    # match.group(1) は既存のリスト、match.group(2) は次の見出しまでの区切り
+                    return f"{header_text}{match.group(1)}\n{entry_text}{match.group(2)}"
+                
+                new_desc = re.sub(pattern, replacer, desc, count=1, flags=re.DOTALL)
+                embed.description = new_desc
+            else:
+                # その種別がまだない場合、一番下に追加
+                embed.description = desc.strip() + f"\n\n{header_text}\n{entry_text}"
+            
             await last_msg.edit(embed=embed)
         else:
-            # 新規メッセージ作成（旧仕様しかなかった場合や、10件埋まっていた場合）
+            # 新規メッセージ作成
             embed = discord.Embed(
                 title=f"📚 {self.media_type} データベース", 
-                description=entry_text, 
+                description=f"{header_text}\n{entry_text}", 
                 color=discord.Color.blue()
             )
             await self.target_channel.send(embed=embed)
 
-        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\nジャンル: {self.genre}", user=interaction.user)
+        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\n種別: {self.sub_type}\nジャンル: {self.genre}", user=interaction.user)
         await interaction.response.send_message(f"✅ 「{self.title_input.value}」を登録しました！", ephemeral=True)
 
 # --- ジャンル・評価選択View ---
@@ -109,7 +125,6 @@ class GenreSelectView(discord.ui.View):
         self.sub_type = "未指定"
         self.genre = "未指定"
 
-        # 選択肢定義
         self.type_map = {
             "小説": [("長編", "📖"), ("短編", "📄"), ("ライトノベル", "⚡"), ("実験小説", "🧪"), ("単行本", "📕"), ("文庫", "📘"), ("Web連載", "🌐"), ("ノベルゲー", "🎮"), ("官能小説", "🔞"), ("その他", "📁")],
             "漫画": [("長編", "🎨"), ("短編", "📝"), ("アンソロジー", "📚"), ("短編集", "📋"), ("Web連載", "📱"), ("読み切り", "🎯"), ("4コマ", "🍀"), ("同人誌", "🤝"), ("フルカラー", "🌈"), ("その他", "📁")],
@@ -142,7 +157,6 @@ class GenreSelectView(discord.ui.View):
     )
     async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.genre = select.values[0]
-        # 確認メッセージ（最終的に表示されるのはジャンルのみですが、確認用として階層表示は残しています）
         await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type} ＞ {self.genre}**\n満足度を選んでください。")
 
     @discord.ui.select(
@@ -244,15 +258,17 @@ class DatabaseCog(commands.Cog):
             if msg.author == self.bot.user and msg.embeds:
                 desc = msg.embeds[0].description
                 if f"**{title}**" in desc:
-                    # 新形式: 【ジャンル】**タイトル**
-                    pattern = r"【[^】]+】\*\*" + re.escape(title) + r"\*\*.*?\n└.*?\n\n"
-                    # 旧形式も念のため対応できる正規表現
+                    # 1行フォーマット削除用正規表現
+                    # 【ジャンル】**タイトル** ... 改行
+                    pattern = r"【[^】]+】\*\*" + re.escape(title) + r"\*\*.*?\n"
+                    new_desc = re.sub(pattern, "", desc)
                     
-                    new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
+                    # 空の見出しが残っていたら消す (**【種別】** だけ残って下に何もない場合)
+                    # 見出しの後に改行が2つ続く(＝中身がない)パターンを除去
+                    new_desc = re.sub(r"(\*\*【[^】]+】\*\*)\n+(?=\*\*|$)", "", new_desc, flags=re.DOTALL)
                     new_desc = new_desc.strip()
-                    if new_desc: new_desc += "\n\n"
 
-                    if not new_desc.strip(): await msg.delete()
+                    if not new_desc: await msg.delete()
                     else:
                         msg.embeds[0].description = new_desc
                         await msg.edit(embed=msg.embeds[0])
@@ -263,23 +279,7 @@ class DatabaseCog(commands.Cog):
     @app_commands.command(name="db_clean_user", description="【注意】ID非保存のため、新形式の投稿は削除できません")
     @app_commands.checks.has_permissions(administrator=True)
     async def db_clean_user(self, interaction: discord.Interaction, channel: discord.TextChannel, user: discord.User):
-        await interaction.response.defer(ephemeral=True)
-        count, target_id = 0, f"||{user.id}||"
-        async for msg in channel.history(limit=100):
-            if msg.author == self.bot.user and msg.embeds:
-                desc = msg.embeds[0].description
-                # 旧仕様のIDが含まれるメッセージのみ対象
-                if target_id in desc:
-                    pattern = r"【[^】]+】\*\*.*?\*\* \u200b " + re.escape(target_id) + r"\n└.*?\n\n"
-                    matches = re.findall(pattern, desc, flags=re.DOTALL)
-                    count += len(matches)
-                    new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
-                    if not new_desc.strip(): await msg.delete()
-                    else:
-                        msg.embeds[0].description = new_desc.strip() + "\n\n"
-                        await msg.edit(embed=msg.embeds[0])
-        
-        await interaction.followup.send(f"✅ {count}件削除しました（旧仕様の投稿のみ）。\n⚠️ 新仕様ではユーザーIDを保存しないため、このコマンドは機能しません。", ephemeral=True)
+        await interaction.response.send_message("⚠️ この機能は現在利用できません（ユーザーIDを保存していないため）。", ephemeral=True)
 
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
