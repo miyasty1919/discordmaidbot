@@ -57,39 +57,41 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         if not check_cooldown(interaction.user.id):
             return await interaction.response.send_message("⚠️ 短時間に投稿しすぎです。", ephemeral=True)
 
-        header_text = f"**{self.sub_type}**"
+        # 変更点: ID削除、ジャンルのみ表示
         entry_text = (
-            f"【{self.media_type} ＞ {self.sub_type} ＞ {self.genre}】**{self.title_input.value}** \u200b ||{interaction.user.id}||\n"
+            f"【{self.genre}】**{self.title_input.value}**\n"
             f"└ 作者: {self.author_input.value or '未入力'} / 満足度: {self.rating}\n\n"
         )
         
         last_msg = None
-        async for msg in self.target_channel.history(limit=50):
+        # 最新のメッセージを確認
+        async for msg in self.target_channel.history(limit=20):
             if msg.author == self.bot.user and msg.embeds:
-                if len(msg.embeds[0].description) + len(entry_text) < 3800:
+                embed = msg.embeds[0]
+                # 現在の埋め込みに含まれる作品数をカウント (「└ 作者:」の数で判定)
+                entry_count = embed.description.count("\n└ 作者:")
+                
+                # 10件未満ならこのメッセージに追加する
+                if entry_count < 10:
                     last_msg = msg
                     break
+                # 10件以上ならループを抜けて新規作成へ
 
         if last_msg:
             embed = last_msg.embeds[0]
-            desc = embed.description
-            if header_text in desc:
-                parts = desc.split(header_text)
-                new_desc = parts[0] + header_text + "\n" + entry_text + parts[1].lstrip()
-            else:
-                new_desc = desc.strip() + f"\n\n{header_text}\n" + entry_text
-            
-            embed.description = new_desc
+            # 単純追記に変更 (階層構造による挿入ロジックを廃止)
+            embed.description += entry_text
             await last_msg.edit(embed=embed)
         else:
+            # 新規作成
             embed = discord.Embed(
                 title=f"📚 {self.media_type} データベース", 
-                description=f"{header_text}\n{entry_text}", 
+                description=entry_text, 
                 color=discord.Color.blue()
             )
             await self.target_channel.send(embed=embed)
 
-        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\n階層: {self.media_type} > {self.sub_type} > {self.genre}", user=interaction.user)
+        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\nジャンル: {self.genre}", user=interaction.user)
         await interaction.response.send_message(f"✅ 「{self.title_input.value}」を登録しました！", ephemeral=True)
 
 # --- ジャンル・評価選択View ---
@@ -132,6 +134,7 @@ class GenreSelectView(discord.ui.View):
     )
     async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.genre = select.values[0]
+        # UI上の表示は親切のため階層を残していますが、登録データはジャンルのみになります
         await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type} ＞ {self.genre}**\n満足度を選んでください。")
 
     @discord.ui.select(
@@ -152,7 +155,7 @@ class GenreSelectView(discord.ui.View):
 # --- 媒体選択View (永続化対応) ---
 class RegistrationView(discord.ui.View):
     def __init__(self, bot):
-        super().__init__(timeout=None) # 永続化のため timeout は None
+        super().__init__(timeout=None)
         self.bot = bot
 
     async def start_registration(self, interaction: discord.Interaction, media: str):
@@ -233,20 +236,28 @@ class DatabaseCog(commands.Cog):
             if msg.author == self.bot.user and msg.embeds:
                 desc = msg.embeds[0].description
                 if f"**{title}**" in desc:
+                    # 変更: 新しいフォーマット(ジャンルのみ、IDなし)に対応する正規表現
+                    # 【ジャンル】**タイトル**
+                    # └ 作者: ... / 満足度 ... (改行2つ)
                     pattern = r"【[^】]+】\*\*" + re.escape(title) + r"\*\*.*?\n└.*?\n\n"
                     new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
-                    new_desc = re.sub(r"\*\*[^*]+\*\*\n+(?=\*\*|$)", "", new_desc)
+                    
+                    # 不要な空行の削除
+                    new_desc = new_desc.strip()
+                    if new_desc: new_desc += "\n\n" # 末尾の改行を復元
+
                     if not new_desc.strip(): await msg.delete()
                     else:
-                        msg.embeds[0].description = new_desc.strip()
+                        msg.embeds[0].description = new_desc
                         await msg.edit(embed=msg.embeds[0])
                     found = True
                     break
         await interaction.followup.send("✅ 削除しました。" if found else "❌ 見つかりません。", ephemeral=True)
 
-    @app_commands.command(name="db_clean_user", description="指定ユーザーの投稿を一括削除します")
+    @app_commands.command(name="db_clean_user", description="指定ユーザーの投稿を一括削除します(旧仕様のみ動作)")
     @app_commands.checks.has_permissions(administrator=True)
     async def db_clean_user(self, interaction: discord.Interaction, channel: discord.TextChannel, user: discord.User):
+        # 注意: ID保存を停止したため、新規投稿分はこのコマンドでは削除できません
         await interaction.response.defer(ephemeral=True)
         count, target_id = 0, f"||{user.id}||"
         async for msg in channel.history(limit=100):
@@ -257,15 +268,13 @@ class DatabaseCog(commands.Cog):
                     matches = re.findall(pattern, desc, flags=re.DOTALL)
                     count += len(matches)
                     new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
-                    new_desc = re.sub(r"\*\*[^*]+\*\*\n+(?=\*\*|$)", "", new_desc)
                     if not new_desc.strip(): await msg.delete()
                     else:
-                        msg.embeds[0].description = new_desc.strip()
+                        msg.embeds[0].description = new_desc.strip() + "\n\n"
                         await msg.edit(embed=msg.embeds[0])
-        await send_log(self.bot, interaction.guild_id, load_config(), f"🗑️ **一括削除**\n対象: {user.mention}\n削除数: {count}", user=interaction.user)
-        await interaction.followup.send(f"✅ {count}件削除しました。", ephemeral=True)
+        await send_log(self.bot, interaction.guild_id, load_config(), f"🗑️ **一括削除(ID指定)**\n対象: {user.mention}\n削除数: {count}", user=interaction.user)
+        await interaction.followup.send(f"✅ {count}件削除しました。(IDが含まれる古い投稿のみ)", ephemeral=True)
 
 async def setup(bot):
-    # 再起動時にボタンを有効化するために add_view を実行
     bot.add_view(RegistrationView(bot))
     await bot.add_cog(DatabaseCog(bot))
