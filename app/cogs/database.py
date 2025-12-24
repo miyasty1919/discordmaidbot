@@ -13,7 +13,7 @@ CONFIG_FILE = "db_config.json"
 # ▼▼▼【重要】ログチャンネルのIDをここに設定できます ▼▼▼
 # 再起動で設定が消える場合は、ここに直接ID（数字）を書いてください。
 # 例: LOG_CHANNEL_ID = 123456789012345678
-LOG_CHANNEL_ID = 0 
+LOG_CHANNEL_ID = 1451167353793413121 
 
 def load_config():
     if not os.path.exists(CONFIG_FILE): return {}
@@ -377,3 +377,4 @@ async def setup(bot):
     bot.add_view(RegistrationView(bot))
     bot.add_view(MemberJoinView(bot))
     await bot.add_cog(DatabaseCog(bot))
+
