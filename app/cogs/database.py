@@ -1,4 +1,3 @@
-
 # cogs/database.py
 import discord
 from discord import app_commands
@@ -59,7 +58,7 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         self.bot, self.config = bot, config
         self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
-async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction):
         # 権限チェック（NGユーザー確認 & 登録メンバー確認）
         guild_id = str(interaction.guild_id)
         guild_config = self.config.get(guild_id, {})
@@ -90,7 +89,6 @@ async def on_submit(self, interaction: discord.Interaction):
 
         last_msg = None
         
-        # --- 変更点ここから ---
         # 最新のメッセージ履歴を確認し、書き込み先を決める
         async for msg in self.target_channel.history(limit=10):
             if msg.author == self.bot.user and msg.embeds:
@@ -108,7 +106,6 @@ async def on_submit(self, interaction: discord.Interaction):
                 # まだ空きがあるメッセージが見つかった
                 last_msg = msg
                 break
-        # --- 変更点ここまで ---
 
         if last_msg:
             embed = last_msg.embeds[0]
@@ -238,7 +235,6 @@ class GenreSelectView(discord.ui.View):
         ]
     )
     async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        # ジャンル選択後、次はタグ選択へ移行
         await interaction.response.edit_message(
             content=f"**{self.media} ＞ {self.sub_type} ＞ {select.values[0]}**\n作品の特徴（タグ）を選んでください。",
             view=TagSelectView(self.bot, self.config, self.media, self.sub_type, select.values[0], self.target_channel)
@@ -317,6 +313,34 @@ class DatabaseCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, view=MemberJoinView(self.bot))
 
+    @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def db_delete(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str):
+        await interaction.response.defer(ephemeral=True)
+        found = False
+        async for msg in channel.history(limit=100):
+            if msg.author == self.bot.user and msg.embeds:
+                desc = msg.embeds[0].description
+                # 引用記法に対応した削除ロジック
+                # "> 🔖 **タイトル**" を探す
+                if f"**{title}**" in desc:
+                    # 1件分のブロック（> 🔖... から 区切り線まで）を削除する正規表現
+                    # 🔖タイトル ～ ━━━━━━━━━━━━━━━━━━━━━━ まで
+                    pattern = r"> 🔖 \*\*" + re.escape(title) + r"\*\*.*?" + re.escape("━━━━━━━━━━━━━━━━━━━━━━") + r"\n?"
+                    new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
+                    
+                    # 空の見出しが残っていたら消す
+                    new_desc = re.sub(r"(📂 \*\*【[^】]+】\*\*)\n+(?=\n📂|$)", "", new_desc, flags=re.DOTALL)
+                    new_desc = new_desc.strip()
+
+                    if not new_desc: await msg.delete()
+                    else:
+                        msg.embeds[0].description = new_desc
+                        await msg.edit(embed=msg.embeds[0])
+                    found = True
+                    break
+        await interaction.followup.send("✅ 削除しました。" if found else "❌ 見つかりません。", ephemeral=True)
+
     @app_commands.command(name="db_blacklist", description="NGユーザーを登録/解除します")
     @app_commands.checks.has_permissions(administrator=True)
     async def db_blacklist(self, interaction: discord.Interaction, user: discord.User):
@@ -338,4 +362,3 @@ async def setup(bot):
     bot.add_view(RegistrationView(bot))
     bot.add_view(MemberJoinView(bot))
     await bot.add_cog(DatabaseCog(bot))
-
