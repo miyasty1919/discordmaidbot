@@ -1,3 +1,4 @@
+
 # cogs/database.py
 import discord
 from discord import app_commands
@@ -28,44 +29,65 @@ async def send_log(bot, guild_id, config, message, user=None):
             embed.set_footer(text=f"発生時刻: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             await channel.send(embed=embed)
 
-user_cooldowns = {}
-def check_cooldown(user_id):
-    now = time.time()
-    if user_id not in user_cooldowns: user_cooldowns[user_id] = []
-    user_cooldowns[user_id] = [t for t in user_cooldowns[user_id] if now - t < 60]
-    if len(user_cooldowns[user_id]) >= 3: return False
-    user_cooldowns[user_id].append(now)
-    return True
+# --- メンバー登録用ビュー ---
+class MemberJoinView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="投稿メンバー登録", style=discord.ButtonStyle.success, emoji="✅", custom_id="db_member_join")
+    async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        config = load_config()
+        guild_id = str(interaction.guild_id)
+        if guild_id not in config: config[guild_id] = {}
+        if "allowed_users" not in config[guild_id]: config[guild_id]["allowed_users"] = []
+
+        if interaction.user.id in config[guild_id]["allowed_users"]:
+            return await interaction.response.send_message("✅ 既に登録されています。", ephemeral=True)
+        
+        config[guild_id]["allowed_users"].append(interaction.user.id)
+        save_config(config)
+        await interaction.response.send_message(f"🎉 {interaction.user.mention} をデータベース投稿メンバーに登録しました！", ephemeral=True)
 
 # --- 作品登録モーダル ---
 class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
     title_input = discord.ui.TextInput(label='タイトル', placeholder='作品名を入力...', required=True)
-    author_input = discord.ui.TextInput(label='作者', placeholder='作者名を入力...', required=False)
+    author_input = discord.ui.TextInput(label='作者/制作', placeholder='作者名を入力...', required=False)
     
-    def __init__(self, bot, config, media_type, sub_type, genre, rating, target_channel):
+    def __init__(self, bot, config, media_type, sub_type, genre, tags, rating, target_channel):
         super().__init__()
         self.bot, self.config = bot, config
-        self.media_type, self.sub_type, self.genre, self.rating, self.target_channel = media_type, sub_type, genre, rating, target_channel
+        self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 権限チェック（NGユーザー確認 & 登録メンバー確認）
         guild_id = str(interaction.guild_id)
-        blacklist = self.config.get(guild_id, {}).get("NGユーザー", [])
+        guild_config = self.config.get(guild_id, {})
+        blacklist = guild_config.get("NGユーザー", [])
+        allowed_users = guild_config.get("allowed_users", [])
+
+        # 管理者権限持ちはスルーしてもいいが、一応ルール通りに
         if interaction.user.id in blacklist:
             await send_log(self.bot, interaction.guild_id, self.config, f"🚫 **投稿拒否 (NGユーザー)**\n内容: {self.title_input.value}", user=interaction.user)
-            return await interaction.response.send_message("⚠️ 投稿権限がありません。", ephemeral=True)
+            return await interaction.response.send_message("⚠️ 投稿権限がありません（NG設定されています）。", ephemeral=True)
+        
+        if interaction.user.id not in allowed_users:
+            return await interaction.response.send_message("⚠️ データベースへの投稿は「メンバー登録」が必要です。\n管理者が設置した登録ボタンを押してください。", ephemeral=True)
 
-        if not check_cooldown(interaction.user.id):
-            return await interaction.response.send_message("⚠️ 短時間に投稿しすぎです。", ephemeral=True)
-
-        # 【仕様変更】1行フォーマットに変更
-        # 例: 【ジャンル】タイトル 作者: 作者名 / 満足度: ⭐⭐
+        # 【デザイン変更】視認性最大化フォーマット
+        # 引用ブロックと絵文字を使ってカード風に見せる
+        author_text = self.author_input.value or '不明'
+        tags_text = " ".join([f"`{t}`" for t in self.tags]) if self.tags else "タグなし"
+        
         entry_text = (
-            f"【{self.genre}】**{self.title_input.value}** "
-            f"作者: {self.author_input.value or '未入力'} / 満足度: {self.rating}"
+            f"> 🔖 **{self.title_input.value}**\n"
+            f"> └ 👤 **作者**: {author_text} ｜ ⭐ **評価**: {self.rating}\n"
+            f"> └ 🏷️ **ジャンル**: {self.genre} ｜ 💭 **特徴**: {tags_text}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━" 
         )
         
         # 種別見出し
-        header_text = f"**【{self.sub_type}】**"
+        header_text = f"📂 **【 {self.sub_type} 】**"
 
         last_msg = None
         # 最新のメッセージ履歴を確認
@@ -74,62 +96,119 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
                 embed = msg.embeds[0]
                 desc = embed.description or ""
 
-                # 旧仕様(ID入り)や満員(10件以上)のメッセージはスキップ
-                # "満足度:" の数で件数をカウントします
-                if "||" in desc or desc.count("満足度:") >= 10:
+                # 文字数が多すぎる(埋め込み上限4096に近い)場合はスキップ
+                if len(desc) > 3500:
                     continue
                 
-                # ここまで来たら書き込み可能なメッセージ
                 last_msg = msg
                 break
 
         if last_msg:
-            # 既存メッセージへの追記処理（種別ごとに整理）
             embed = last_msg.embeds[0]
             desc = embed.description
 
             if header_text in desc:
-                # すでにその種別の見出しが存在する場合、そのブロックの末尾に追加する
-                # 正規表現: 見出し〜次の見出し(または文末)の間を探す
-                pattern = re.escape(header_text) + r"(.*?)(\n\n\*\*【|$)"
-                
-                # マッチした箇所（同じ種別のリスト）の最後に新しい行を追加
+                # 既存の種別ブロックの末尾に追加
+                pattern = re.escape(header_text) + r"(.*?)(\n\n📂 \*\*【|$)"
                 def replacer(match):
-                    # match.group(1) は既存のリスト、match.group(2) は次の見出しまでの区切り
                     return f"{header_text}{match.group(1)}\n{entry_text}{match.group(2)}"
-                
                 new_desc = re.sub(pattern, replacer, desc, count=1, flags=re.DOTALL)
                 embed.description = new_desc
             else:
-                # その種別がまだない場合、一番下に追加
+                # 新しい種別として追加
                 embed.description = desc.strip() + f"\n\n{header_text}\n{entry_text}"
             
             await last_msg.edit(embed=embed)
         else:
-            # 新規メッセージ作成
+            # 新規作成
             embed = discord.Embed(
-                title=f"📚 {self.media_type} データベース", 
+                title=f"📚 {self.media_type} コレクション", 
                 description=f"{header_text}\n{entry_text}", 
-                color=discord.Color.blue()
+                color=discord.Color.from_rgb(44, 47, 51) # ダークテーマに合う色
             )
+            # 視認性を高めるためのサムネイル（メディアごとに変えてもOK）
             await self.target_channel.send(embed=embed)
 
-        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\n種別: {self.sub_type}\nジャンル: {self.genre}", user=interaction.user)
-        await interaction.response.send_message(f"✅ 「{self.title_input.value}」を登録しました！", ephemeral=True)
+        await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\nユーザー: {interaction.user.display_name}", user=interaction.user)
+        await interaction.response.send_message(f"✅ 「{self.title_input.value}」をデータベースに追加しました！", ephemeral=True)
 
-# --- ジャンル・評価選択View ---
+# --- 評価タグ選択View ---
+class TagSelectView(discord.ui.View):
+    def __init__(self, bot, config, media, sub_type, genre, target_channel):
+        super().__init__(timeout=600)
+        self.bot, self.config = bot, config
+        self.media, self.sub_type, self.genre = media, sub_type, genre
+        self.target_channel = target_channel
+        self.tags = []
+
+    @discord.ui.select(
+        placeholder="4. 作品の魅力を選択 (複数可)", min_values=1, max_values=5, row=0,
+        options=[
+            # 視覚・演出
+            discord.SelectOption(label="絵が綺麗", emoji="🎨"),
+            discord.SelectOption(label="作画崩壊なし", emoji="✨"),
+            discord.SelectOption(label="演出が神", emoji="🎬"),
+            discord.SelectOption(label="キャラデザが良い", emoji="👗"),
+            discord.SelectOption(label="世界観が美しい", emoji="🌏"),
+            # ストーリー・構成
+            discord.SelectOption(label="ストーリーが深い", emoji="📖"),
+            discord.SelectOption(label="伏線回収がすごい", emoji="🧩"),
+            discord.SelectOption(label="展開が熱い", emoji="🔥"),
+            discord.SelectOption(label="テンポが良い", emoji="⏩"),
+            discord.SelectOption(label="結末が衝撃的", emoji="⚡"),
+            # 感情・体験
+            discord.SelectOption(label="泣ける", emoji="😭"),
+            discord.SelectOption(label="笑える", emoji="🤣"),
+            discord.SelectOption(label="キュンとする", emoji="🫰"),
+            discord.SelectOption(label="恐怖を感じる", emoji="😱"),
+            discord.SelectOption(label="考えさせられる", emoji="🤔"),
+            discord.SelectOption(label="癒される", emoji="🌿"),
+            discord.SelectOption(label="鬱展開", emoji="💀"),
+            discord.SelectOption(label="爽快感がある", emoji="💨"),
+            # キャラクター
+            discord.SelectOption(label="主人公が推せる", emoji="🦸"),
+            discord.SelectOption(label="ヒロインが可愛い", emoji="💕"),
+            discord.SelectOption(label="敵キャラが魅力的", emoji="😈"),
+            discord.SelectOption(label="声優が豪華", emoji="🎙️"),
+            # その他・おすすめ
+            discord.SelectOption(label="初心者におすすめ", emoji="🔰"),
+            discord.SelectOption(label="玄人向け", emoji="🕶️"),
+            discord.SelectOption(label="隠れた名作", emoji="💎"),
+        ]
+    )
+    async def tag_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.tags = select.values
+        await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type} ＞ {self.genre}**\n選択タグ: {', '.join(self.tags)}\n最後に満足度を選んでください。")
+
+    @discord.ui.select(
+        placeholder="5. 総合満足度を選択", row=1,
+        options=[
+            discord.SelectOption(label="🏆 殿堂入り (文句なしの神作)", value="👑 殿堂入り"),
+            discord.SelectOption(label="⭐⭐⭐⭐⭐ (超おすすめ)", value="⭐⭐⭐⭐⭐"),
+            discord.SelectOption(label="⭐⭐⭐⭐ (面白い)", value="⭐⭐⭐⭐"),
+            discord.SelectOption(label="⭐⭐⭐ (普通)", value="⭐⭐⭐"),
+            discord.SelectOption(label="⭐⭐ (微妙)", value="⭐⭐"),
+            discord.SelectOption(label="⭐ (時間の無駄)", value="⭐"),
+            discord.SelectOption(label="🚫 閲覧注意", value="🚫 閲覧注意"),
+        ]
+    )
+    async def rating_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.send_modal(WorkRegistrationModal(
+            self.bot, self.config, self.media, self.sub_type, self.genre, self.tags, select.values[0], self.target_channel
+        ))
+
+# --- ジャンル選択View ---
 class GenreSelectView(discord.ui.View):
     def __init__(self, bot, config, media, target_channel):
         super().__init__(timeout=600)
         self.bot, self.config, self.media, self.target_channel = bot, config, media, target_channel
         self.sub_type = "未指定"
-        self.genre = "未指定"
 
         self.type_map = {
-            "小説": [("長編", "📖"), ("短編", "📄"), ("ライトノベル", "⚡"), ("実験小説", "🧪"), ("単行本", "📕"), ("文庫", "📘"), ("Web連載", "🌐"), ("ノベルゲー", "🎮"), ("官能小説", "🔞"), ("その他", "📁")],
-            "漫画": [("長編", "🎨"), ("短編", "📝"), ("アンソロジー", "📚"), ("短編集", "📋"), ("Web連載", "📱"), ("読み切り", "🎯"), ("4コマ", "🍀"), ("同人誌", "🤝"), ("フルカラー", "🌈"), ("その他", "📁")],
-            "アニメ": [("TVシリーズ(1期)", "📺"), ("TVシリーズ(2期以降)", "🔁"), ("劇場版", "🎬"), ("OVA", "📀"), ("Webアニメ", "💻"), ("短編アニメ", "⏲️"), ("個人製作", "👤"), ("リマスター", "✨"), ("実写融合", "🎭"), ("その他", "📁")],
-            "映画": [("邦画", "🗾"), ("洋画", "🇺🇸"), ("ドキュメンタリー", "📹"), ("実話ベース", "📰"), ("短編映画", "🎞️"), ("リバイバル", "🔙"), ("3D/IMAX", "🕶️"), ("インディーズ", "🎸"), ("オムニバス", "🧩"), ("その他", "📁")]
+            "小説": [("長編", "📖"), ("短編", "📄"), ("ラノベ", "⚡"), ("なろう系", "🏰"), ("文庫", "📘"), ("Web連載", "🌐"), ("その他", "📁")],
+            "漫画": [("長編", "🎨"), ("短編", "📝"), ("Web漫画", "📱"), ("読み切り", "🎯"), ("4コマ", "🍀"), ("同人誌", "🤝"), ("その他", "📁")],
+            "アニメ": [("TVアニメ", "📺"), ("劇場版", "🎬"), ("OVA", "📀"), ("Webアニメ", "💻"), ("ショート", "⏲️"), ("その他", "📁")],
+            "映画": [("邦画", "🗾"), ("洋画", "🇺🇸"), ("アニメ映画", "🦁"), ("ドキュメンタリー", "📹"), ("その他", "📁")]
         }
         self.sub_type_select.options = [discord.SelectOption(label=n, emoji=e) for n, e in self.type_map.get(media, [("その他", "📁")])]
 
@@ -141,38 +220,23 @@ class GenreSelectView(discord.ui.View):
     @discord.ui.select(
         placeholder="2. ジャンルを選択", row=1,
         options=[
-            discord.SelectOption(label="アクション", emoji="⚔️"), discord.SelectOption(label="アニメ化作品", emoji="🎬"),
-            discord.SelectOption(label="日常", emoji="☕"), discord.SelectOption(label="エッセイ・実録", emoji="✍️"),
-            discord.SelectOption(label="オカルト", emoji="🔮"), discord.SelectOption(label="学園", emoji="🏫"),
-            discord.SelectOption(label="官能", emoji="🔞"), discord.SelectOption(label="グルメ", emoji="🍳"),
-            discord.SelectOption(label="コメディ", emoji="🤣"), discord.SelectOption(label="サスペンス", emoji="😨"),
-            discord.SelectOption(label="時代劇・歴史", emoji="🏯"), discord.SelectOption(label="児童書・絵本", emoji="🧸"),
-            discord.SelectOption(label="実用・ビジネス", emoji="📊"), discord.SelectOption(label="SF", emoji="🚀"),
-            discord.SelectOption(label="スポーツ", emoji="⚽"), discord.SelectOption(label="なろう系・転生", emoji="🏰"),
-            discord.SelectOption(label="ファンタジー", emoji="🧙"), discord.SelectOption(label="BL", emoji="💎"),
-            discord.SelectOption(label="ホラー", emoji="👻"), discord.SelectOption(label="ミステリー", emoji="🔍"),
-            discord.SelectOption(label="百合", emoji="🌸"), discord.SelectOption(label="TL", emoji="💋"),
-            discord.SelectOption(label="恋愛", emoji="💖"), discord.SelectOption(label="その他", emoji="📁"),
+            discord.SelectOption(label="アクション/バトル", emoji="⚔️"), discord.SelectOption(label="ファンタジー", emoji="🧙"),
+            discord.SelectOption(label="ラブコメ/恋愛", emoji="💖"), discord.SelectOption(label="日常/ほのぼの", emoji="☕"),
+            discord.SelectOption(label="SF/サイバーパンク", emoji="🚀"), discord.SelectOption(label="ホラー/サイコ", emoji="👻"),
+            discord.SelectOption(label="ミステリー/サスペンス", emoji="🔍"), discord.SelectOption(label="異世界転生", emoji="🏰"),
+            discord.SelectOption(label="スポーツ", emoji="⚽"), discord.SelectOption(label="音楽/アイドル", emoji="🎤"),
+            discord.SelectOption(label="歴史/時代劇", emoji="🏯"), discord.SelectOption(label="ビジネス/教養", emoji="📊"),
+            discord.SelectOption(label="コメディ/ギャグ", emoji="🤣"), discord.SelectOption(label="鬱/シリアス", emoji="🌧️"),
+            discord.SelectOption(label="百合", emoji="🌸"), discord.SelectOption(label="BL", emoji="💎"),
+            discord.SelectOption(label="R-18/成人向け", emoji="🔞"), discord.SelectOption(label="その他", emoji="📁"),
         ]
     )
     async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        self.genre = select.values[0]
-        await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type} ＞ {self.genre}**\n満足度を選んでください。")
-
-    @discord.ui.select(
-        placeholder="3. 満足度を選択", row=2,
-        options=[
-            discord.SelectOption(label="🏆 殿堂入り", value="👑 殿堂入り"),
-            discord.SelectOption(label="⭐⭐⭐⭐⭐", value="⭐⭐⭐⭐⭐"),
-            discord.SelectOption(label="⭐⭐⭐⭐", value="⭐⭐⭐⭐"),
-            discord.SelectOption(label="⭐⭐⭐", value="⭐⭐⭐"),
-            discord.SelectOption(label="⭐⭐", value="⭐⭐"),
-            discord.SelectOption(label="⭐", value="⭐"),
-            discord.SelectOption(label="🚫 二度と読まない", value="💀 二度と読まない"),
-        ]
-    )
-    async def rating_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.send_modal(WorkRegistrationModal(self.bot, self.config, self.media, self.sub_type, self.genre, select.values[0], self.target_channel))
+        # ジャンル選択後、次はタグ選択へ移行
+        await interaction.response.edit_message(
+            content=f"**{self.media} ＞ {self.sub_type} ＞ {select.values[0]}**\n作品の特徴（タグ）を選んでください。",
+            view=TagSelectView(self.bot, self.config, self.media, self.sub_type, select.values[0], self.target_channel)
+        )
 
 # --- 媒体選択View ---
 class RegistrationView(discord.ui.View):
@@ -183,6 +247,11 @@ class RegistrationView(discord.ui.View):
     async def start_registration(self, interaction: discord.Interaction, media: str):
         config_data = load_config()
         guild_id = str(interaction.guild_id)
+        
+        # メンバー登録チェック
+        if interaction.user.id not in config_data.get(guild_id, {}).get("allowed_users", []):
+             return await interaction.response.send_message("⚠️ 投稿権限がありません。\n管理者が設置した「メンバー登録ボタン」を押してください。", ephemeral=True)
+
         channel_id = config_data.get(guild_id, {}).get(media)
         if not channel_id:
             return await interaction.response.send_message(f"❌ {media} の保存先が設定されていません。", ephemeral=True)
@@ -228,6 +297,20 @@ class DatabaseCog(commands.Cog):
         save_config(config_data)
         await interaction.response.send_message(f"✅ {media.name} の設定を保存しました。", ephemeral=True)
 
+    @app_commands.command(name="db_menu", description="登録メニューを表示します")
+    async def db_menu(self, interaction: discord.Interaction):
+        await interaction.response.send_message("📚 **作品登録パネル**", view=RegistrationView(self.bot))
+
+    @app_commands.command(name="db_member_reg", description="投稿メンバー登録ボタンを設置します")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def db_member_reg(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="📝 データベース投稿メンバー登録",
+            description="下のボタンを押すと、データベースへの投稿権限が付与されます。",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, view=MemberJoinView(self.bot))
+
     @app_commands.command(name="db_blacklist", description="NGユーザーを登録/解除します")
     @app_commands.checks.has_permissions(administrator=True)
     async def db_blacklist(self, interaction: discord.Interaction, user: discord.User):
@@ -245,42 +328,7 @@ class DatabaseCog(commands.Cog):
         await send_log(self.bot, interaction.guild_id, config_data, msg, user=interaction.user)
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="db_menu", description="登録メニューを表示します")
-    async def db_menu(self, interaction: discord.Interaction):
-        await interaction.response.send_message("📚 **作品登録パネル**", view=RegistrationView(self.bot))
-
-    @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def db_delete(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str):
-        await interaction.response.defer(ephemeral=True)
-        found = False
-        async for msg in channel.history(limit=100):
-            if msg.author == self.bot.user and msg.embeds:
-                desc = msg.embeds[0].description
-                if f"**{title}**" in desc:
-                    # 1行フォーマット削除用正規表現
-                    # 【ジャンル】**タイトル** ... 改行
-                    pattern = r"【[^】]+】\*\*" + re.escape(title) + r"\*\*.*?\n"
-                    new_desc = re.sub(pattern, "", desc)
-                    
-                    # 空の見出しが残っていたら消す (**【種別】** だけ残って下に何もない場合)
-                    # 見出しの後に改行が2つ続く(＝中身がない)パターンを除去
-                    new_desc = re.sub(r"(\*\*【[^】]+】\*\*)\n+(?=\*\*|$)", "", new_desc, flags=re.DOTALL)
-                    new_desc = new_desc.strip()
-
-                    if not new_desc: await msg.delete()
-                    else:
-                        msg.embeds[0].description = new_desc
-                        await msg.edit(embed=msg.embeds[0])
-                    found = True
-                    break
-        await interaction.followup.send("✅ 削除しました。" if found else "❌ 見つかりません。", ephemeral=True)
-
-    @app_commands.command(name="db_clean_user", description="【注意】ID非保存のため、新形式の投稿は削除できません")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def db_clean_user(self, interaction: discord.Interaction, channel: discord.TextChannel, user: discord.User):
-        await interaction.response.send_message("⚠️ この機能は現在利用できません（ユーザーIDを保存していないため）。", ephemeral=True)
-
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
+    bot.add_view(MemberJoinView(bot))
     await bot.add_cog(DatabaseCog(bot))
