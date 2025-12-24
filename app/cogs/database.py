@@ -46,7 +46,7 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
     async def on_submit(self, interaction: discord.Interaction):
-        # NGユーザーチェックのみ残す（荒らし対策）
+        # 荒らし対策: NGユーザーのチェックのみ行う
         guild_id = str(interaction.guild_id)
         guild_config = self.config.get(guild_id, {})
         blacklist = guild_config.get("NGユーザー", [])
@@ -76,6 +76,7 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
                 embed = msg.embeds[0]
                 desc = embed.description or ""
                 
+                # 「コレクション」というタイトルの埋め込みのみ対象
                 if "コレクション" in (embed.title or ""):
                     # 10件埋まっているか、文字数限界なら新規作成へ
                     if desc.count("🔖") >= 10 or len(desc) > 3500:
@@ -228,7 +229,7 @@ class RegistrationView(discord.ui.View):
         config_data = load_config()
         guild_id = str(interaction.guild_id)
         
-        # メンバー認証チェックを削除しました
+        # 【修正】認証チェックを完全に削除しました
 
         channel_id = config_data.get(guild_id, {}).get(media)
         if not channel_id:
@@ -278,8 +279,6 @@ class DatabaseCog(commands.Cog):
     @app_commands.command(name="db_menu", description="登録メニューを表示します")
     async def db_menu(self, interaction: discord.Interaction):
         await interaction.response.send_message("📚 **作品登録パネル**", view=RegistrationView(self.bot))
-
-    # db_member_reg コマンドは不要になったため削除しました
 
     @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します（管理者のみ）")
     @app_commands.checks.has_permissions(administrator=True)
@@ -332,5 +331,4 @@ class DatabaseCog(commands.Cog):
 
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
-    # MemberJoinView は削除しました
     await bot.add_cog(DatabaseCog(bot))
