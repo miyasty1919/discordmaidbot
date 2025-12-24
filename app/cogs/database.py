@@ -179,7 +179,93 @@ class TagSelectView(discord.ui.View):
             self.bot, self.config, self.media, self.sub_type, self.genre, self.tags, select.values[0], self.target_channel
         ))
 
+# --- ジャンル選択View（25種類拡張版） ---
 class GenreSelectView(discord.ui.View):
+    def __init__(self, bot, config, media, target_channel):
+        super().__init__(timeout=600)
+        self.bot, self.config, self.media, self.target_channel = bot, config, media, target_channel
+        self.sub_type = "未指定"
+
+        self.type_map = {
+            "小説": [
+                ("長編小説", "📖"), ("短編小説", "📄"), ("ショートショート", "⚡"), ("連作短編", "🔗"), ("Web連載", "🌐"),
+                ("ライトノベル", "🦄"), ("新文芸/なろう系", "🏰"), ("ライト文芸", "🍃"), ("一般文芸", "📘"), ("純文学", "🖋️"),
+                ("児童文学", "🎈"), ("絵本", "🎨"), ("詩集/短歌/俳句", "🎋"), ("エッセイ/随筆", "✍️"), ("ノンフィクション", "🌍"),
+                ("脚本/戯曲", "🎭"), ("TRPGリプレイ", "🎲"), ("ケータイ小説", "📱"), ("ゲームブック", "🗺️"), ("アンソロジー", "💐"),
+                ("ノベライズ", "🎬"), ("評論/批評", "🗣️"), ("実用書/ビジネス", "📊"), ("同人誌", "🤝"), ("その他", "📁")
+            ],
+            "漫画": [
+                ("長編連載", "📚"), ("短期連載", "📉"), ("読み切り", "🎯"), ("4コマ漫画", "🍀"), ("1ページ漫画", "🖼️"),
+                ("Web漫画/縦読み", "📱"), ("少年漫画", "⚔️"), ("青年漫画", "🚬"), ("少女漫画", "🎀"), ("女性漫画", "💄"),
+                ("BL漫画", "💎"), ("百合/GL漫画", "🌸"), ("コミックエッセイ", "🤣"), ("学習まんが", "🎓"), ("アメコミ/海外", "🦸"),
+                ("同人誌(オリジナル)", "✨"), ("同人誌(二次創作)", "💞"), ("アンソロジー", "🍱"), ("完全版/愛蔵版", "📦"), ("スピンオフ", "🌪️"),
+                ("コミカライズ", "🎞️"), ("画集/イラスト集", "🎨"), ("ファンブック", "📒"), ("成人向け", "🔞"), ("その他", "📁")
+            ],
+            "アニメ": [
+                ("TVアニメ(30分)", "📺"), ("TVアニメ(ショート)", "⏲️"), ("劇場版アニメ", "🎬"), ("OVA", "📀"), ("Webアニメ", "💻"),
+                ("パイロット版", "✈️"), ("MV/PV", "🎵"), ("自主制作アニメ", "🔨"), ("ストップモーション", "🧶"), ("3DCGアニメ", "🧊"),
+                ("クレイアニメ", "🏺"), ("特撮ドラマ", "💥"), ("人形劇", "🧸"), ("キッズ/ファミリー", "👨‍👩‍👧"), ("深夜アニメ", "🌙"),
+                ("海外アニメ", "🇺🇸"), ("2.5次元舞台", "💃"), ("声優イベント", "🎙️"), ("ドラマCD", "💿"), ("特典映像", "🎁"),
+                ("再放送/リマスター", "✨"), ("予告/CM", "📢"), ("Vtuber関連", "🤖"), ("教育/知育", "📛"), ("その他", "📁")
+            ],
+            "映画": [
+                ("実写邦画", "🗾"), ("実写洋画", "🇺🇸"), ("アニメ映画(邦画)", "🦁"), ("アニメ映画(洋画)", "🐼"), ("3DCG映画", "👓"),
+                ("ドキュメンタリー", "📹"), ("短編映画", "⏳"), ("インディーズ", "🎸"), ("韓流/アジア映画", "🌏"), ("ヨーロッパ映画", "🏰"),
+                ("インド/ボリウッド", "👳"), ("ミュージカル", "💃"), ("時代劇", "🏯"), ("特撮映画", "🦕"), ("モノクロ/無声", "📽️"),
+                ("ライブビューイング", "🎫"), ("4DX/IMAX系", "🎢"), ("オムニバス", "🧩"), ("Vシネマ/OV", "📼"), ("テレビ映画/SP", "📺"),
+                ("配信限定作品", "📶"), ("学生映画", "🎓"), ("舞台/演劇", "🎭"), ("成人映画", "🔞"), ("その他", "📁")
+            ]
+        }
+        
+        # 選択されたメディアに対応する選択肢を設定（安全のため25個でカット）
+        options = [discord.SelectOption(label=n, emoji=e) for n, e in self.type_map.get(media, [("その他", "📁")])]
+        self.sub_type_select.options = options[:25]
+
+    @discord.ui.select(placeholder="1. 種別を選択", row=0)
+    async def sub_type_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.sub_type = select.values[0]
+        await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type}**\n次にジャンルを選択してください。")
+
+    @discord.ui.select(
+        placeholder="2. ジャンルを選択", row=1,
+        options=[
+            # ジャンル25種類
+            discord.SelectOption(label="アクション/バトル", emoji="⚔️"),
+            discord.SelectOption(label="冒険/ダンジョン", emoji="🗺️"),
+            discord.SelectOption(label="ファンタジー", emoji="🧙"),
+            discord.SelectOption(label="異世界/転生", emoji="🏰"),
+            discord.SelectOption(label="SF/サイバーパンク", emoji="🚀"),
+            
+            discord.SelectOption(label="恋愛/ロマンス", emoji="💖"),
+            discord.SelectOption(label="ラブコメ", emoji="💞"),
+            discord.SelectOption(label="学園/青春", emoji="🏫"),
+            discord.SelectOption(label="日常/ほのぼの", emoji="☕"),
+            discord.SelectOption(label="ヒューマンドラマ", emoji="😢"),
+
+            discord.SelectOption(label="ミステリー/推理", emoji="🔍"),
+            discord.SelectOption(label="サスペンス/スリラー", emoji="🔪"),
+            discord.SelectOption(label="ホラー/オカルト", emoji="👻"),
+            discord.SelectOption(label="鬱/シリアス", emoji="🌧️"),
+
+            discord.SelectOption(label="コメディ/ギャグ", emoji="🤣"),
+            discord.SelectOption(label="スポーツ/競技", emoji="⚽"),
+            discord.SelectOption(label="音楽/アイドル", emoji="🎤"),
+            discord.SelectOption(label="グルメ/料理", emoji="🍳"),
+            discord.SelectOption(label="動物/生き物", emoji="🐾"),
+
+            discord.SelectOption(label="歴史/時代劇", emoji="🏯"),
+            discord.SelectOption(label="戦争/ミリタリー", emoji="🪖"),
+            discord.SelectOption(label="ビジネス/社会派", emoji="📊"),
+            discord.SelectOption(label="百合/GL", emoji="🌸"),
+            discord.SelectOption(label="BL", emoji="💎"),
+            discord.SelectOption(label="R-18/成人向け", emoji="🔞"),
+        ]
+    )
+    async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.edit_message(
+            content=f"**{self.media} ＞ {self.sub_type} ＞ {select.values[0]}**\n作品の特徴（タグ）を選んでください。",
+            view=TagSelectView(self.bot, self.config, self.media, self.sub_type, select.values[0], self.target_channel)
+        )
 
 # --- 媒体選択View ---
 class RegistrationView(discord.ui.View):
@@ -191,8 +277,6 @@ class RegistrationView(discord.ui.View):
         config_data = load_config()
         guild_id = str(interaction.guild_id)
         
-        # 【修正】認証チェックを完全に削除しました
-
         channel_id = config_data.get(guild_id, {}).get(media)
         if not channel_id:
             return await interaction.response.send_message(f"❌ {media} の保存先が設定されていません。", ephemeral=True)
@@ -294,4 +378,3 @@ class DatabaseCog(commands.Cog):
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
     await bot.add_cog(DatabaseCog(bot))
-
