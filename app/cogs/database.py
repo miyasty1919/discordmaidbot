@@ -179,45 +179,7 @@ class TagSelectView(discord.ui.View):
             self.bot, self.config, self.media, self.sub_type, self.genre, self.tags, select.values[0], self.target_channel
         ))
 
-# --- ジャンル選択View ---
 class GenreSelectView(discord.ui.View):
-    def __init__(self, bot, config, media, target_channel):
-        super().__init__(timeout=600)
-        self.bot, self.config, self.media, self.target_channel = bot, config, media, target_channel
-        self.sub_type = "未指定"
-
-        self.type_map = {
-            "小説": [("長編", "📖"), ("短編", "📄"), ("ラノベ", "⚡"), ("なろう系", "🏰"), ("文庫", "📘"), ("Web連載", "🌐"), ("その他", "📁")],
-            "漫画": [("長編", "🎨"), ("短編", "📝"), ("Web漫画", "📱"), ("読み切り", "🎯"), ("4コマ", "🍀"), ("同人誌", "🤝"), ("その他", "📁")],
-            "アニメ": [("TVアニメ", "📺"), ("劇場版", "🎬"), ("OVA", "📀"), ("Webアニメ", "💻"), ("ショート", "⏲️"), ("その他", "📁")],
-            "映画": [("邦画", "🗾"), ("洋画", "🇺🇸"), ("アニメ映画", "🦁"), ("ドキュメンタリー", "📹"), ("その他", "📁")]
-        }
-        self.sub_type_select.options = [discord.SelectOption(label=n, emoji=e) for n, e in self.type_map.get(media, [("その他", "📁")])]
-
-    @discord.ui.select(placeholder="1. 種別を選択", row=0)
-    async def sub_type_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        self.sub_type = select.values[0]
-        await interaction.response.edit_message(content=f"**{self.media} ＞ {self.sub_type}**\n次にジャンルを選択してください。")
-
-    @discord.ui.select(
-        placeholder="2. ジャンルを選択", row=1,
-        options=[
-            discord.SelectOption(label="アクション/バトル", emoji="⚔️"), discord.SelectOption(label="ファンタジー", emoji="🧙"),
-            discord.SelectOption(label="ラブコメ/恋愛", emoji="💖"), discord.SelectOption(label="日常/ほのぼの", emoji="☕"),
-            discord.SelectOption(label="SF/サイバーパンク", emoji="🚀"), discord.SelectOption(label="ホラー/サイコ", emoji="👻"),
-            discord.SelectOption(label="ミステリー/サスペンス", emoji="🔍"), discord.SelectOption(label="異世界転生", emoji="🏰"),
-            discord.SelectOption(label="スポーツ", emoji="⚽"), discord.SelectOption(label="音楽/アイドル", emoji="🎤"),
-            discord.SelectOption(label="歴史/時代劇", emoji="🏯"), discord.SelectOption(label="ビジネス/教養", emoji="📊"),
-            discord.SelectOption(label="コメディ/ギャグ", emoji="🤣"), discord.SelectOption(label="鬱/シリアス", emoji="🌧️"),
-            discord.SelectOption(label="百合", emoji="🌸"), discord.SelectOption(label="BL", emoji="💎"),
-            discord.SelectOption(label="R-18/成人向け", emoji="🔞"), discord.SelectOption(label="その他", emoji="📁"),
-        ]
-    )
-    async def genre_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.edit_message(
-            content=f"**{self.media} ＞ {self.sub_type} ＞ {select.values[0]}**\n作品の特徴（タグ）を選んでください。",
-            view=TagSelectView(self.bot, self.config, self.media, self.sub_type, select.values[0], self.target_channel)
-        )
 
 # --- 媒体選択View ---
 class RegistrationView(discord.ui.View):
@@ -332,3 +294,4 @@ class DatabaseCog(commands.Cog):
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
     await bot.add_cog(DatabaseCog(bot))
+
