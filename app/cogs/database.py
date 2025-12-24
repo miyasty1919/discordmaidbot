@@ -10,10 +10,9 @@ import re
 
 CONFIG_FILE = "db_config.json"
 
-# ▼▼▼【重要】ログチャンネルのIDをここに設定できます ▼▼▼
+# ▼▼▼【重要】ログチャンネルのID設定 ▼▼▼
 # 再起動で設定が消える場合は、ここに直接ID（数字）を書いてください。
-# 例: LOG_CHANNEL_ID = 123456789012345678
-LOG_CHANNEL_ID = 1451167353793413121 
+LOG_CHANNEL_ID = 0 
 
 def load_config():
     if not os.path.exists(CONFIG_FILE): return {}
@@ -23,10 +22,7 @@ def save_config(config):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f: json.dump(config, f, indent=4, ensure_ascii=False)
 
 async def send_log(bot, guild_id, config, message, user=None):
-    # 1. コードで直接指定されたIDがあればそれを使う
     target_id = LOG_CHANNEL_ID
-    
-    # 2. なければ設定ファイル（コマンドで設定したもの）から探す
     if not target_id:
         target_id = config.get(str(guild_id), {}).get("ログ")
         
@@ -58,9 +54,7 @@ class MemberJoinView(discord.ui.View):
         config[guild_id]["allowed_users"].append(interaction.user.id)
         save_config(config)
         
-        # ★追加: 登録時にもログを送信する
         await send_log(self.bot, interaction.guild_id, config, f"🆕 **メンバー登録**\nユーザー: {interaction.user.mention} がデータベースへの投稿権限を取得しました。", user=interaction.user)
-        
         await interaction.response.send_message(f"🎉 {interaction.user.mention} をデータベース投稿メンバーに登録しました！", ephemeral=True)
 
 # --- 作品登録モーダル ---
@@ -74,7 +68,7 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 権限チェック（NGユーザー確認 & 登録メンバー確認）
+        # 権限チェック
         guild_id = str(interaction.guild_id)
         guild_config = self.config.get(guild_id, {})
         blacklist = guild_config.get("NGユーザー", [])
@@ -91,7 +85,6 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         author_text = self.author_input.value or '不明'
         tags_text = " ".join([f"`{t}`" for t in self.tags]) if self.tags else "タグなし"
         
-        # 1件分のテキストデータ
         entry_text = (
             f"> 🔖 **{self.title_input.value}**\n"
             f"> └ 👤 **作者**: {author_text} ｜ ⭐ **評価**: {self.rating}\n"
@@ -99,31 +92,31 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
             f"━━━━━━━━━━━━━━━━━━━━━━" 
         )
         
-        # 種別見出し
         header_text = f"📂 **【 {self.sub_type} 】**"
 
-        last_msg = None
+        target_msg = None
         
-        # 最新のメッセージ履歴を確認し、書き込み先を決める
-        async for msg in self.target_channel.history(limit=10):
+        # 【変更点】最新のボットメッセージ「だけ」を確認する
+        # 過去の空きメッセージを探すのではなく、一番新しいページがいっぱいかどうかだけを見る
+        async for msg in self.target_channel.history(limit=20):
             if msg.author == self.bot.user and msg.embeds:
                 embed = msg.embeds[0]
                 desc = embed.description or ""
-
-                # 🔖マークを数えて件数を取得
-                entry_count = desc.count("🔖")
-
-                # 条件: 「10件以上ある」または「文字数が限界に近い(3500字以上)」なら
-                # そのメッセージは満員とみなしてスキップする（次を探す or 新規作成）
-                if entry_count >= 10 or len(desc) > 3500:
-                    continue
                 
-                # まだ空きがあるメッセージが見つかった
-                last_msg = msg
-                break
+                # そのメッセージが現在進行系のデータベースか確認（タイトルなどで簡易チェック）
+                if "コレクション" in (embed.title or ""):
+                    # 10件埋まっているか、文字数限界なら「満員」とみなしてループ終了（新規作成へ）
+                    if desc.count("🔖") >= 10 or len(desc) > 3500:
+                        target_msg = None # 満員なので新規作成
+                    else:
+                        target_msg = msg  # 空きがあるのでここに追記
+                    
+                    # 最新のものだけ判定したいので、見つけた時点でBreak
+                    break
 
-        if last_msg:
-            embed = last_msg.embeds[0]
+        if target_msg:
+            # 追記処理
+            embed = target_msg.embeds[0]
             desc = embed.description
 
             if header_text in desc:
@@ -134,12 +127,12 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
                 new_desc = re.sub(pattern, replacer, desc, count=1, flags=re.DOTALL)
                 embed.description = new_desc
             else:
-                # 新しい種別として追加
+                # 新しい種別として一番下に追加
                 embed.description = desc.strip() + f"\n\n{header_text}\n{entry_text}"
             
-            await last_msg.edit(embed=embed)
+            await target_msg.edit(embed=embed)
         else:
-            # 書き込めるメッセージがない（全部満員か、まだ無い）場合は新規作成
+            # 新規メッセージ作成（1ページ目が満員、またはまだ無い場合）
             embed = discord.Embed(
                 title=f"📚 {self.media_type} コレクション", 
                 description=f"{header_text}\n{entry_text}", 
@@ -328,33 +321,39 @@ class DatabaseCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, view=MemberJoinView(self.bot))
 
-    @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します")
+    @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します（管理者のみ）")
     @app_commands.checks.has_permissions(administrator=True)
     async def db_delete(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str):
+        # 削除は管理者のみ実行可能
         await interaction.response.defer(ephemeral=True)
         found = False
-        async for msg in channel.history(limit=100):
+        async for msg in channel.history(limit=50):
             if msg.author == self.bot.user and msg.embeds:
                 desc = msg.embeds[0].description
-                # 引用記法に対応した削除ロジック
-                # "> 🔖 **タイトル**" を探す
                 if f"**{title}**" in desc:
                     # 1件分のブロック（> 🔖... から 区切り線まで）を削除する正規表現
-                    # 🔖タイトル ～ ━━━━━━━━━━━━━━━━━━━━━━ まで
+                    # 埋め込みフォーマットに合わせて厳密に削除
                     pattern = r"> 🔖 \*\*" + re.escape(title) + r"\*\*.*?" + re.escape("━━━━━━━━━━━━━━━━━━━━━━") + r"\n?"
                     new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
                     
-                    # 空の見出しが残っていたら消す
+                    # 空になった見出し（カテゴリ）が残っていたら消す
                     new_desc = re.sub(r"(📂 \*\*【[^】]+】\*\*)\n+(?=\n📂|$)", "", new_desc, flags=re.DOTALL)
                     new_desc = new_desc.strip()
 
-                    if not new_desc: await msg.delete()
+                    if not new_desc: 
+                        await msg.delete() # コンテンツが空になったらメッセージごと削除
                     else:
                         msg.embeds[0].description = new_desc
                         await msg.edit(embed=msg.embeds[0])
                     found = True
+                    # タイトル指定で見つかったら1件消して終了（重複削除を防ぐため）
                     break
-        await interaction.followup.send("✅ 削除しました。" if found else "❌ 見つかりません。", ephemeral=True)
+        
+        if found:
+            await send_log(self.bot, interaction.guild_id, load_config(), f"🗑️ **作品削除**\nタイトル: {title}", user=interaction.user)
+            await interaction.followup.send("✅ 作品を削除しました。", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ 指定されたタイトルの作品が見つかりませんでした。", ephemeral=True)
 
     @app_commands.command(name="db_blacklist", description="NGユーザーを登録/解除します")
     @app_commands.checks.has_permissions(administrator=True)
