@@ -10,6 +10,11 @@ import re
 
 CONFIG_FILE = "db_config.json"
 
+# ▼▼▼【重要】ログチャンネルのIDをここに設定できます ▼▼▼
+# 再起動で設定が消える場合は、ここに直接ID（数字）を書いてください。
+# 例: LOG_CHANNEL_ID = 123456789012345678
+LOG_CHANNEL_ID = 0 
+
 def load_config():
     if not os.path.exists(CONFIG_FILE): return {}
     with open(CONFIG_FILE, "r", encoding="utf-8") as f: return json.load(f)
@@ -18,9 +23,15 @@ def save_config(config):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f: json.dump(config, f, indent=4, ensure_ascii=False)
 
 async def send_log(bot, guild_id, config, message, user=None):
-    log_channel_id = config.get(str(guild_id), {}).get("ログ")
-    if log_channel_id:
-        channel = bot.get_channel(int(log_channel_id))
+    # 1. コードで直接指定されたIDがあればそれを使う
+    target_id = LOG_CHANNEL_ID
+    
+    # 2. なければ設定ファイル（コマンドで設定したもの）から探す
+    if not target_id:
+        target_id = config.get(str(guild_id), {}).get("ログ")
+        
+    if target_id:
+        channel = bot.get_channel(int(target_id))
         if channel:
             embed = discord.Embed(title="🛡️ 操作ログ", description=message, color=discord.Color.dark_gray())
             if user:
@@ -46,6 +57,10 @@ class MemberJoinView(discord.ui.View):
         
         config[guild_id]["allowed_users"].append(interaction.user.id)
         save_config(config)
+        
+        # ★追加: 登録時にもログを送信する
+        await send_log(self.bot, interaction.guild_id, config, f"🆕 **メンバー登録**\nユーザー: {interaction.user.mention} がデータベースへの投稿権限を取得しました。", user=interaction.user)
+        
         await interaction.response.send_message(f"🎉 {interaction.user.mention} をデータベース投稿メンバーに登録しました！", ephemeral=True)
 
 # --- 作品登録モーダル ---
