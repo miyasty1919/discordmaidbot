@@ -35,28 +35,6 @@ async def send_log(bot, guild_id, config, message, user=None):
             embed.set_footer(text=f"発生時刻: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             await channel.send(embed=embed)
 
-# --- メンバー登録用ビュー ---
-class MemberJoinView(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
-
-    @discord.ui.button(label="投稿メンバー登録", style=discord.ButtonStyle.success, emoji="✅", custom_id="db_member_join")
-    async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = load_config()
-        guild_id = str(interaction.guild_id)
-        if guild_id not in config: config[guild_id] = {}
-        if "allowed_users" not in config[guild_id]: config[guild_id]["allowed_users"] = []
-
-        if interaction.user.id in config[guild_id]["allowed_users"]:
-            return await interaction.response.send_message("✅ 既に登録されています。", ephemeral=True)
-        
-        config[guild_id]["allowed_users"].append(interaction.user.id)
-        save_config(config)
-        
-        await send_log(self.bot, interaction.guild_id, config, f"🆕 **メンバー登録**\nユーザー: {interaction.user.mention} がデータベースへの投稿権限を取得しました。", user=interaction.user)
-        await interaction.response.send_message(f"🎉 {interaction.user.mention} をデータベース投稿メンバーに登録しました！", ephemeral=True)
-
 # --- 作品登録モーダル ---
 class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
     title_input = discord.ui.TextInput(label='タイトル', placeholder='作品名を入力...', required=True)
@@ -68,19 +46,15 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 権限チェック
+        # NGユーザーチェックのみ残す（荒らし対策）
         guild_id = str(interaction.guild_id)
         guild_config = self.config.get(guild_id, {})
         blacklist = guild_config.get("NGユーザー", [])
-        allowed_users = guild_config.get("allowed_users", [])
 
         if interaction.user.id in blacklist:
             await send_log(self.bot, interaction.guild_id, self.config, f"🚫 **投稿拒否 (NGユーザー)**\n内容: {self.title_input.value}", user=interaction.user)
             return await interaction.response.send_message("⚠️ 投稿権限がありません（NG設定されています）。", ephemeral=True)
         
-        if interaction.user.id not in allowed_users:
-            return await interaction.response.send_message("⚠️ データベースへの投稿は「メンバー登録」が必要です。\n管理者が設置した登録ボタンを押してください。", ephemeral=True)
-
         # 投稿内容の作成
         author_text = self.author_input.value or '不明'
         tags_text = " ".join([f"`{t}`" for t in self.tags]) if self.tags else "タグなし"
@@ -96,22 +70,18 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
 
         target_msg = None
         
-        # 【変更点】最新のボットメッセージ「だけ」を確認する
-        # 過去の空きメッセージを探すのではなく、一番新しいページがいっぱいかどうかだけを見る
+        # 最新のボットメッセージを確認
         async for msg in self.target_channel.history(limit=20):
             if msg.author == self.bot.user and msg.embeds:
                 embed = msg.embeds[0]
                 desc = embed.description or ""
                 
-                # そのメッセージが現在進行系のデータベースか確認（タイトルなどで簡易チェック）
                 if "コレクション" in (embed.title or ""):
-                    # 10件埋まっているか、文字数限界なら「満員」とみなしてループ終了（新規作成へ）
+                    # 10件埋まっているか、文字数限界なら新規作成へ
                     if desc.count("🔖") >= 10 or len(desc) > 3500:
-                        target_msg = None # 満員なので新規作成
+                        target_msg = None 
                     else:
-                        target_msg = msg  # 空きがあるのでここに追記
-                    
-                    # 最新のものだけ判定したいので、見つけた時点でBreak
+                        target_msg = msg
                     break
 
         if target_msg:
@@ -132,7 +102,7 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
             
             await target_msg.edit(embed=embed)
         else:
-            # 新規メッセージ作成（1ページ目が満員、またはまだ無い場合）
+            # 新規メッセージ作成
             embed = discord.Embed(
                 title=f"📚 {self.media_type} コレクション", 
                 description=f"{header_text}\n{entry_text}", 
@@ -258,9 +228,7 @@ class RegistrationView(discord.ui.View):
         config_data = load_config()
         guild_id = str(interaction.guild_id)
         
-        # メンバー登録チェック
-        if interaction.user.id not in config_data.get(guild_id, {}).get("allowed_users", []):
-             return await interaction.response.send_message("⚠️ 投稿権限がありません。\n管理者が設置した「メンバー登録ボタン」を押してください。", ephemeral=True)
+        # メンバー認証チェックを削除しました
 
         channel_id = config_data.get(guild_id, {}).get(media)
         if not channel_id:
@@ -311,15 +279,7 @@ class DatabaseCog(commands.Cog):
     async def db_menu(self, interaction: discord.Interaction):
         await interaction.response.send_message("📚 **作品登録パネル**", view=RegistrationView(self.bot))
 
-    @app_commands.command(name="db_member_reg", description="投稿メンバー登録ボタンを設置します")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def db_member_reg(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="📝 データベース投稿メンバー登録",
-            description="下のボタンを押すと、データベースへの投稿権限が付与されます。",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed, view=MemberJoinView(self.bot))
+    # db_member_reg コマンドは不要になったため削除しました
 
     @app_commands.command(name="db_delete", description="作品をタイトル指定で削除します（管理者のみ）")
     @app_commands.checks.has_permissions(administrator=True)
@@ -331,8 +291,7 @@ class DatabaseCog(commands.Cog):
             if msg.author == self.bot.user and msg.embeds:
                 desc = msg.embeds[0].description
                 if f"**{title}**" in desc:
-                    # 1件分のブロック（> 🔖... から 区切り線まで）を削除する正規表現
-                    # 埋め込みフォーマットに合わせて厳密に削除
+                    # 1件分のブロックを削除する正規表現
                     pattern = r"> 🔖 \*\*" + re.escape(title) + r"\*\*.*?" + re.escape("━━━━━━━━━━━━━━━━━━━━━━") + r"\n?"
                     new_desc = re.sub(pattern, "", desc, flags=re.DOTALL)
                     
@@ -341,12 +300,11 @@ class DatabaseCog(commands.Cog):
                     new_desc = new_desc.strip()
 
                     if not new_desc: 
-                        await msg.delete() # コンテンツが空になったらメッセージごと削除
+                        await msg.delete()
                     else:
                         msg.embeds[0].description = new_desc
                         await msg.edit(embed=msg.embeds[0])
                     found = True
-                    # タイトル指定で見つかったら1件消して終了（重複削除を防ぐため）
                     break
         
         if found:
@@ -374,6 +332,5 @@ class DatabaseCog(commands.Cog):
 
 async def setup(bot):
     bot.add_view(RegistrationView(bot))
-    bot.add_view(MemberJoinView(bot))
+    # MemberJoinView は削除しました
     await bot.add_cog(DatabaseCog(bot))
-
