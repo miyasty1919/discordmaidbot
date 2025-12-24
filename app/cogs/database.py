@@ -59,14 +59,13 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         self.bot, self.config = bot, config
         self.media_type, self.sub_type, self.genre, self.tags, self.rating, self.target_channel = media_type, sub_type, genre, tags, rating, target_channel
 
-    async def on_submit(self, interaction: discord.Interaction):
+async def on_submit(self, interaction: discord.Interaction):
         # 権限チェック（NGユーザー確認 & 登録メンバー確認）
         guild_id = str(interaction.guild_id)
         guild_config = self.config.get(guild_id, {})
         blacklist = guild_config.get("NGユーザー", [])
         allowed_users = guild_config.get("allowed_users", [])
 
-        # 管理者権限持ちはスルーしてもいいが、一応ルール通りに
         if interaction.user.id in blacklist:
             await send_log(self.bot, interaction.guild_id, self.config, f"🚫 **投稿拒否 (NGユーザー)**\n内容: {self.title_input.value}", user=interaction.user)
             return await interaction.response.send_message("⚠️ 投稿権限がありません（NG設定されています）。", ephemeral=True)
@@ -74,11 +73,11 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         if interaction.user.id not in allowed_users:
             return await interaction.response.send_message("⚠️ データベースへの投稿は「メンバー登録」が必要です。\n管理者が設置した登録ボタンを押してください。", ephemeral=True)
 
-        # 【デザイン変更】視認性最大化フォーマット
-        # 引用ブロックと絵文字を使ってカード風に見せる
+        # 投稿内容の作成
         author_text = self.author_input.value or '不明'
         tags_text = " ".join([f"`{t}`" for t in self.tags]) if self.tags else "タグなし"
         
+        # 1件分のテキストデータ
         entry_text = (
             f"> 🔖 **{self.title_input.value}**\n"
             f"> └ 👤 **作者**: {author_text} ｜ ⭐ **評価**: {self.rating}\n"
@@ -90,18 +89,26 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
         header_text = f"📂 **【 {self.sub_type} 】**"
 
         last_msg = None
-        # 最新のメッセージ履歴を確認
+        
+        # --- 変更点ここから ---
+        # 最新のメッセージ履歴を確認し、書き込み先を決める
         async for msg in self.target_channel.history(limit=10):
             if msg.author == self.bot.user and msg.embeds:
                 embed = msg.embeds[0]
                 desc = embed.description or ""
 
-                # 文字数が多すぎる(埋め込み上限4096に近い)場合はスキップ
-                if len(desc) > 3500:
+                # 🔖マークを数えて件数を取得
+                entry_count = desc.count("🔖")
+
+                # 条件: 「10件以上ある」または「文字数が限界に近い(3500字以上)」なら
+                # そのメッセージは満員とみなしてスキップする（次を探す or 新規作成）
+                if entry_count >= 10 or len(desc) > 3500:
                     continue
                 
+                # まだ空きがあるメッセージが見つかった
                 last_msg = msg
                 break
+        # --- 変更点ここまで ---
 
         if last_msg:
             embed = last_msg.embeds[0]
@@ -120,13 +127,12 @@ class WorkRegistrationModal(discord.ui.Modal, title='作品登録'):
             
             await last_msg.edit(embed=embed)
         else:
-            # 新規作成
+            # 書き込めるメッセージがない（全部満員か、まだ無い）場合は新規作成
             embed = discord.Embed(
                 title=f"📚 {self.media_type} コレクション", 
                 description=f"{header_text}\n{entry_text}", 
-                color=discord.Color.from_rgb(44, 47, 51) # ダークテーマに合う色
+                color=discord.Color.from_rgb(44, 47, 51)
             )
-            # 視認性を高めるためのサムネイル（メディアごとに変えてもOK）
             await self.target_channel.send(embed=embed)
 
         await send_log(self.bot, interaction.guild_id, self.config, f"✅ **作品登録**\nタイトル: {self.title_input.value}\nユーザー: {interaction.user.display_name}", user=interaction.user)
@@ -332,3 +338,4 @@ async def setup(bot):
     bot.add_view(RegistrationView(bot))
     bot.add_view(MemberJoinView(bot))
     await bot.add_cog(DatabaseCog(bot))
+
